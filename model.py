@@ -19,7 +19,7 @@ def get_activation(name):
     if name == 'relu':
         activation = nn.ReLU()
     elif name == 'elu':
-        activation == nn.ELU()
+        activation = nn.ELU()
     elif name == 'leaky_relu':
         activation = nn.LeakyReLU(negative_slope=0.2)
     elif name == 'tanh':
@@ -31,50 +31,17 @@ def get_activation(name):
     return activation
 
 
-class Conv2dSame(nn.Module):
+class DepthwiseSeparableConv(nn.Module):
 
-    def __init__(self, in_channels, out_channels, kernel_size, stride):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
         super().__init__()
-
-        padding = self.conv_same_pad(kernel_size, stride)
-        if type(padding) is not tuple:
-            self.conv = nn.Conv2d(
-                in_channels, out_channels, kernel_size, stride, padding)
-        else:
-            self.conv = nn.Sequential(
-                nn.ConstantPad2d(padding*2, 0),
-                nn.Conv2d(in_channels, out_channels, kernel_size, stride, 0)
-            )
-
-    def conv_same_pad(self, ksize, stride):
-        if (ksize - stride) % 2 == 0:
-            return (ksize - stride) // 2
-        else:
-            left = (ksize - stride) // 2
-            right = left + 1
-            return left, right
-
+        self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=in_channels)
+        self.pointwise = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+    
     def forward(self, x):
-        return self.conv(x)
-
-
-class ConvTranspose2dSame(nn.Module):
-
-    def __init__(self, in_channels, out_channels, kernel_size, stride):
-        super().__init__()
-
-        padding, output_padding = self.deconv_same_pad(kernel_size, stride)
-        self.trans_conv = nn.ConvTranspose2d(
-            in_channels, out_channels, kernel_size, stride,
-            padding, output_padding)
-
-    def deconv_same_pad(self, ksize, stride):
-        pad = (ksize - stride + 1) // 2
-        outpad = 2 * pad + stride - ksize
-        return pad, outpad
-
-    def forward(self, x):
-        return self.trans_conv(x)
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        return x
 
 
 class UpBlock(nn.Module):
@@ -84,8 +51,8 @@ class UpBlock(nn.Module):
 
         self.mode = mode
         if mode == 'deconv':
-            self.up = ConvTranspose2dSame(
-                channel, channel, kernel_size, stride=scale)
+            self.up = nn.ConvTranspose2d(
+                channel, channel, kernel_size, stride=scale, padding=kernel_size//2, output_padding=scale-1)
         else:
             def upsample(x):
                 return F.interpolate(x, scale_factor=scale, mode=mode)
@@ -107,7 +74,7 @@ class EncodeBlock(nn.Module):
 
         layers = []
         layers.append(
-            Conv2dSame(self.c_in, self.c_out, kernel_size, stride))
+            DepthwiseSeparableConv(self.c_in, self.c_out, kernel_size, stride, padding=kernel_size//2))
         if normalization:
             layers.append(get_norm(normalization, self.c_out))
         if activation:
@@ -134,7 +101,7 @@ class DecodeBlock(nn.Module):
 
         layers = []
         layers.append(
-            Conv2dSame(self.c_in, self.c_out, kernel_size, stride=1))
+            DepthwiseSeparableConv(self.c_in, self.c_out, kernel_size, stride=1, padding=kernel_size//2))
         if normalization:
             layers.append(get_norm(normalization, self.c_out))
         if activation:
@@ -156,13 +123,13 @@ class BlendBlock(nn.Module):
         super().__init__()
         c_mid = max(c_in // 2, 32)
         self.blend = nn.Sequential(
-            Conv2dSame(c_in, c_mid, 1, 1),
+            DepthwiseSeparableConv(c_in, c_mid, 1, 1),
             get_norm(norm, c_mid),
             get_activation(act),
-            Conv2dSame(c_mid, c_out, ksize_mid, 1),
+            DepthwiseSeparableConv(c_mid, c_out, ksize_mid, 1, padding=ksize_mid//2),
             get_norm(norm, c_out),
             get_activation(act),
-            Conv2dSame(c_out, c_out, 1, 1),
+            DepthwiseSeparableConv(c_out, c_out, 1, 1),
             nn.Sigmoid()
         )
 
@@ -175,7 +142,7 @@ class FusionBlock(nn.Module):
         super().__init__()
         c_img = 3
         self.map2img = nn.Sequential(
-            Conv2dSame(c_feat, c_img, 1, 1),
+            DepthwiseSeparableConv(c_feat, c_img, 1, 1),
             nn.Sigmoid())
         self.blend = BlendBlock(c_img*2, c_alpha)
 
