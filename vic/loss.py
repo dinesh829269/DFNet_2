@@ -315,7 +315,20 @@ class ClipL1(nn.Module):
         loss = torch.mean(torch.clamp(torch.abs(sr-hr), self.clip_min, self.clip_max))
         return loss
 
+import torch
+import torch.nn as nn
 
+class MaskedL1Loss(nn.Module):
+    def __init__(self):
+        super(MaskedL1Loss, self).__init__()
+
+    def forward(self, input, target, mask=None):
+        loss = torch.abs(input - target)
+        if mask is not None:
+            loss = loss * mask
+        return loss.mean()
+
+'''
 class MaskedL1Loss(nn.Module):
     r"""Masked L1 loss constructor."""
     def __init__(self):
@@ -339,7 +352,7 @@ class MaskedL1Loss(nn.Module):
             # Only average over regions which are valid.
             loss = loss * torch.numel(mask) / (torch.sum(mask) + 1e-6)
         return loss
-
+'''
 
 class MultiscalePixelLoss(nn.Module):
     def __init__(self, loss_f = torch.nn.L1Loss(), scale = 5):
