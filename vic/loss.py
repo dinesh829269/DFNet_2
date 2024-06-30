@@ -442,7 +442,7 @@ class L1_regularization(torch.nn.Module):
         return torch.sum(reg_L1) / (b*(h-1)*(w-1))
 
 
-
+'''
 #TODO: testing
 # Color loss
 class ColorLoss(torch.nn.Module):
@@ -469,7 +469,7 @@ class AverageLoss(torch.nn.Module):
         target_uv = rgb_to_yuv(self.ds_f(target), consts='uv')
         return self.criterion(input_uv, target_uv)
 
-
+'''
 
 
 ########################
