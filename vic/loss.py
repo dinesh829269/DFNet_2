@@ -87,34 +87,27 @@ class GANLoss(nn.Module):
             loss = self.loss(input, target_label)
             return loss
 
+
 class GradientPenaltyLoss(nn.Module):
-    def __init__(self, critic):
-        super().__init__()
-        self.critic = critic
+    def __init__(self, device=torch.device('cpu')):
+        super(GradientPenaltyLoss, self).__init__()
+        self.register_buffer('grad_outputs', torch.Tensor())
+        self.grad_outputs = self.grad_outputs.to(device)
 
-    def forward(self, out, gt_res):
-        batch_size = out.size(0)
-        epsilon = torch.rand(batch_size, 1, 1, 1, device=out.device)
-        interp = epsilon * out + (1 - epsilon) * gt_res
-        interp.requires_grad_(True)
+    def get_grad_outputs(self, input):
+        if self.grad_outputs.size() != input.size():
+            self.grad_outputs.resize_(input.size()).fill_(1.0)
+        return self.grad_outputs
 
-        interp_crit = self.critic(interp)
+    def forward(self, interp, interp_crit):
+        grad_outputs = self.get_grad_outputs(interp_crit)
+        grad_interp = torch.autograd.grad(outputs=interp_crit, inputs=interp, \
+            grad_outputs=grad_outputs, create_graph=True, retain_graph=True, only_inputs=True)[0]
+        grad_interp = grad_interp.view(grad_interp.size(0), -1)
+        grad_interp_norm = grad_interp.norm(2, dim=1)
 
-        grad_outputs = torch.ones_like(interp_crit, device=out.device)
-        gradients = torch.autograd.grad(
-            outputs=interp_crit,
-            inputs=interp,
-            grad_outputs=grad_outputs,
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True,
-        )[0]
-
-        gradients = gradients.view(batch_size, -1)
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-
-        return gradient_penalty
-
+        loss = ((grad_interp_norm - 1)**2).mean()
+        return loss
 
 
 class HFENLoss(nn.Module): # Edge loss with pre_smooth
@@ -322,20 +315,7 @@ class ClipL1(nn.Module):
         loss = torch.mean(torch.clamp(torch.abs(sr-hr), self.clip_min, self.clip_max))
         return loss
 
-import torch
-import torch.nn as nn
 
-class MaskedL1Loss(nn.Module):
-    def __init__(self):
-        super(MaskedL1Loss, self).__init__()
-
-    def forward(self, input, target, mask=None):
-        loss = torch.abs(input - target)
-        if mask is not None:
-            loss = loss * mask
-        return loss.mean()
-
-'''
 class MaskedL1Loss(nn.Module):
     r"""Masked L1 loss constructor."""
     def __init__(self):
@@ -359,7 +339,7 @@ class MaskedL1Loss(nn.Module):
             # Only average over regions which are valid.
             loss = loss * torch.numel(mask) / (torch.sum(mask) + 1e-6)
         return loss
-'''
+
 
 class MultiscalePixelLoss(nn.Module):
     def __init__(self, loss_f = torch.nn.L1Loss(), scale = 5):
@@ -442,7 +422,7 @@ class L1_regularization(torch.nn.Module):
         return torch.sum(reg_L1) / (b*(h-1)*(w-1))
 
 
-'''
+
 #TODO: testing
 # Color loss
 class ColorLoss(torch.nn.Module):
@@ -469,7 +449,7 @@ class AverageLoss(torch.nn.Module):
         target_uv = rgb_to_yuv(self.ds_f(target), consts='uv')
         return self.criterion(input_uv, target_uv)
 
-'''
+
 
 
 ########################
