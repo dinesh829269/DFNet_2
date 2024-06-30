@@ -88,26 +88,30 @@ class GANLoss(nn.Module):
             return loss
 
 
+import torch
+import torch.nn as nn
+
 class GradientPenaltyLoss(nn.Module):
-    def __init__(self, device=torch.device('cpu')):
+    def __init__(self):
         super(GradientPenaltyLoss, self).__init__()
-        self.register_buffer('grad_outputs', torch.Tensor())
-        self.grad_outputs = self.grad_outputs.to(device)
 
-    def get_grad_outputs(self, input):
-        if self.grad_outputs.size() != input.size():
-            self.grad_outputs.resize_(input.size()).fill_(1.0)
-        return self.grad_outputs
+    def forward(self, real, fake):
+        batch_size = real.size(0)
+        epsilon = torch.rand(batch_size, 1, 1, 1, device=real.device, requires_grad=True)
+        interp = epsilon * real + (1 - epsilon) * fake
+        interp_crit = self.critic(interp)  # Assuming you have a critic function defined
 
-    def forward(self, interp, interp_crit):
-        grad_outputs = self.get_grad_outputs(interp_crit)
-        grad_interp = torch.autograd.grad(outputs=interp_crit, inputs=interp, \
-            grad_outputs=grad_outputs, create_graph=True, retain_graph=True, only_inputs=True)[0]
-        grad_interp = grad_interp.view(grad_interp.size(0), -1)
-        grad_interp_norm = grad_interp.norm(2, dim=1)
+        # Ensure interp requires grad
+        interp.requires_grad_(True)
 
-        loss = ((grad_interp_norm - 1)**2).mean()
-        return loss
+        grad_outputs = torch.ones_like(interp_crit, device=real.device)
+        grad_interp = torch.autograd.grad(outputs=interp_crit, inputs=interp,
+                                          grad_outputs=grad_outputs,
+                                          create_graph=True, retain_graph=True, only_inputs=True)[0]
+        grad_interp = grad_interp.view(batch_size, -1)
+        grad_penalty = ((grad_interp.norm(2, dim=1) - 1) ** 2).mean()
+        return grad_penalty
+
 
 
 class HFENLoss(nn.Module): # Edge loss with pre_smooth
