@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+
 from utils import resize_like
 
 
@@ -31,6 +32,7 @@ def get_activation(name):
 
 
 class DepthwiseSeparableConv(nn.Module):
+
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
         super().__init__()
         self.depthwise = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=stride, padding=padding, groups=in_channels)
@@ -43,6 +45,7 @@ class DepthwiseSeparableConv(nn.Module):
 
 
 class UpBlock(nn.Module):
+
     def __init__(self, mode='nearest', scale=2, channel=None, kernel_size=4):
         super().__init__()
 
@@ -59,54 +62,34 @@ class UpBlock(nn.Module):
         return self.up(x)
 
 
-# Define the ResNet basic block
-class ResNetBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None, normalization='batch', activation='relu'):
-        super(ResNetBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
-        self.bn1 = get_norm(normalization, out_channels)
-        self.activation = get_activation(activation)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
-        self.bn2 = get_norm(normalization, out_channels)
-        self.downsample = downsample
+class EncodeBlock(nn.Module):
 
-    def forward(self, x):
-        identity = x
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.activation(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.activation(out)
-
-        return out
-
-
-# Define the ResNet-based encoder block
-class ResNetEncodeBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=2, normalization='batch', activation='relu'):
+    def __init__(
+            self, in_channels, out_channels, kernel_size, stride,
+            normalization=None, activation=None):
         super().__init__()
 
-        downsample = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
-            get_norm(normalization, out_channels)
-        )
+        self.c_in = in_channels
+        self.c_out = out_channels
 
-        self.block = ResNetBlock(in_channels, out_channels, stride=stride, downsample=downsample, normalization=normalization, activation=activation)
+        layers = []
+        layers.append(
+            DepthwiseSeparableConv(self.c_in, self.c_out, kernel_size, stride, padding=kernel_size//2))
+        if normalization:
+            layers.append(get_norm(normalization, self.c_out))
+        if activation:
+            layers.append(get_activation(activation))
+        self.encode = nn.Sequential(*layers)
 
     def forward(self, x):
-        return self.block(x)
+        return self.encode(x)
 
 
 class DecodeBlock(nn.Module):
-    def __init__(self, c_from_up, c_from_down, c_out, mode='nearest', kernel_size=4, scale=2, normalization='batch', activation='relu'):
+
+    def __init__(
+            self, c_from_up, c_from_down, c_out, mode='nearest',
+            kernel_size=4, scale=2, normalization='batch', activation='relu'):
         super().__init__()
 
         self.c_from_up = c_from_up
@@ -134,7 +117,9 @@ class DecodeBlock(nn.Module):
 
 
 class BlendBlock(nn.Module):
-    def __init__(self, c_in, c_out, ksize_mid=3, norm='batch', act='leaky_relu'):
+
+    def __init__(
+            self, c_in, c_out, ksize_mid=3, norm='batch', act='leaky_relu'):
         super().__init__()
         c_mid = max(c_in // 2, 32)
         self.blend = nn.Sequential(
@@ -169,34 +154,46 @@ class FusionBlock(nn.Module):
         return result, alpha, raw
 
 
-class ResNetDFNet(nn.Module):
-    def __init__(self, c_img=3, c_mask=1, c_alpha=3, mode='nearest', norm='batch', act_en='relu', act_de='leaky_relu',
-                 en_channels=[64, 128, 256, 512], de_ksize=[3]*4, blend_layers=[0, 1, 2, 3]):
+class DFNet(nn.Module):
+    def __init__(
+            self, c_img=3, c_mask=1, c_alpha=3,
+            mode='nearest', norm='batch', act_en='relu', act_de='leaky_relu',
+            en_ksize=[7, 5, 5, 3, 3, 3, 3, 3], de_ksize=[3]*8,
+            blend_layers=[0, 1, 2, 3, 4, 5]):
         super().__init__()
 
         c_init = c_img + c_mask
-        self.n_en = len(en_channels)
+
+        self.n_en = len(en_ksize)
         self.n_de = len(de_ksize)
+        assert self.n_en == self.n_de, (
+            'The number layer of Encoder and Decoder must be equal.')
+        assert self.n_en >= 1, (
+            'The number layer of Encoder and Decoder must be greater than 1.')
 
         assert 0 in blend_layers, 'Layer 0 must be blended.'
 
-        # ResNet Encoder
         self.en = []
         c_in = c_init
-        for c_out in en_channels:
-            self.en.append(ResNetEncodeBlock(c_in, c_out, stride=2, normalization=norm, activation=act_en))
-            c_in = c_out
+        self.en.append(
+            EncodeBlock(c_in, 64, en_ksize[0], 2, None, None))
+        for k_en in en_ksize[1:]:
+            c_in = self.en[-1].c_out
+            c_out = min(c_in*2, 512)
+            self.en.append(EncodeBlock(
+                c_in, c_out, k_en, stride=2,
+                normalization=norm, activation=act_en))
 
         # register parameters
         for i, en in enumerate(self.en):
             self.__setattr__('en_{}'.format(i), en)
 
-        # Decoder
         self.de = []
         self.fuse = []
         for i, k_de in enumerate(de_ksize):
-            c_from_up = self.en[-1].block.conv2.out_channels if i == 0 else self.de[-1].c_out
-            c_out = c_from_down = self.en[-i-1].block.conv1.in_channels
+
+            c_from_up = self.en[-1].c_out if i == 0 else self.de[-1].c_out
+            c_out = c_from_down = self.en[-i-1].c_in
             layer_idx = self.n_de - i - 1
 
             self.de.append(DecodeBlock(
@@ -215,6 +212,7 @@ class ResNetDFNet(nn.Module):
                 self.__setattr__('fuse_{}'.format(i), fuse)
 
     def forward(self, img_miss, mask):
+
         out = torch.cat([img_miss, mask], dim=1)
 
         out_en = [out]
@@ -231,4 +229,6 @@ class ResNetDFNet(nn.Module):
                 result, alpha, raw = fuse(img_miss, out)
                 results.append(result)
                 alphas.append(alpha)
-                raws
+                raws.append(raw)
+
+        return results[::-1], alphas[::-1], raws[::-1]

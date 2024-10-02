@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from data import DS
 from loss import InpaintingLoss
-from model import DFNet
+from model import ResNetDFNet
 
 from torchvision.utils import save_image
 
@@ -80,7 +80,7 @@ iterator_train = iter(data.DataLoader(
     num_workers=args.n_threads
 ))
 print(len(dataset))
-model = DFNet().to(device)
+model = ResNetDFNet().to(device)
 
 lr = args.lr
 

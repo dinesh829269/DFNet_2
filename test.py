@@ -11,7 +11,7 @@ import torch
 import tqdm
 
 from utils import list2nparray, gen_miss, merge_imgs
-from model import DFNet
+from model import ResNetDFNet
 
 
 class Tester:
@@ -39,7 +39,7 @@ class Tester:
             self.device = torch.device('cpu')
             print('Using cpu.')
 
-        self.model = DFNet().to(self.device)
+        self.model = ResNetDFNet().to(self.device)
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint)
         self.model.eval()
